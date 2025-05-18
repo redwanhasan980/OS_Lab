@@ -1,0 +1,5 @@
+1 . write Sytem call manual
+man 2 write 
+ssize_t write(int fd, const void *buf, size_t count);
+1 . Read Sytem call manual
+man 2 read 
