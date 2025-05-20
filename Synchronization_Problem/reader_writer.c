@@ -1,78 +1,94 @@
-// Why use a semaphore (roomEmpty) instead of just a mutex, even though the semaphore behaves similarly here?
-// Semaphores are more general than mutexes
-// A mutex is essentially a binary semaphore specifically designed for mutual exclusion between threads. But semaphores can have counts > 1, \
-enabling them to represent more complex resource states (e.g., counting available slots in a buffer).
+// 😬 The Real Problem (Race Condition Risk)
+// The critical problem appears when the reader is scheduled right before the writer locks roomEmpty:
 
-// In the Reader-Writer problem, semaphore usage gives more flexibility
-// The roomEmpty semaphore here acts like a binary semaphore (mutex), but conceptually it’s signaling whether the room is empty or not.
+// Reader thread increments readCount and calls pthread_mutex_lock(&roomEmpty).
 
-// Writers wait until the room is empty to write (sem_wait on roomEmpty).
+// Suppose the writer has not yet locked roomEmpty — the reader succeeds in locking it.
 
-// Readers take the room if it’s empty (first reader sem_waits) and release it if they’re the last (last reader sem_post).
+// Then the writer runs and locks roomEmpty — but oops, it shouldn't be allowed, because now the 
+// writer and readers are in the critical section at the same time.
 
-// This "empty/full" signaling is naturally expressed with semaphores.
-
-// In real systems, semaphore implementations can offer fairness and priority controls
-// Semaphores can be used in a way that prioritizes writers over readers or vice versa,
-// depending on system needs. Mutexes generally don’t provide this built-in.
-
-// Semaphores can be used across processes, mutexes are usually thread-specific
-// If you want synchronization beyond threads (e.g., processes), semaphores are more flexible.
+// This is because pthread_mutex_lock() has no mechanism for waiting based on priority or fairness — there's 
+// no way to express the semantic “if the room is empty, I go in — otherwise I wait.” This semantic is 
+// perfectly captured by a semaphore, but not a mutex.
 #include <stdio.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <unistd.h>
 
-pthread_mutex_t roomEmpty;   // Mutex to ensure room is empty for writers
-pthread_mutex_t mutex;       // Protect readCount
-
+sem_t roomEmpty;          // Semaphore to control writers and first/last reader
+pthread_mutex_t mutex;    // Mutex to protect readCount
 int readCount = 0;
 
 void* reader(void* arg) {
+    long id = (long)arg;
+
+    // Entry section for reader
     pthread_mutex_lock(&mutex);
     readCount++;
-    if (readCount == 1)
-        pthread_mutex_lock(&roomEmpty); // First reader locks roomEmpty to block writers
+    if (readCount == 1) {
+        sem_wait(&roomEmpty);  // First reader locks the room
+    }
     pthread_mutex_unlock(&mutex);
 
-    // Reading...
-    printf("Reader %ld is reading...\n", (long)arg);
-    sleep(1);
+    // Critical section (reading)
+    printf("Reader %ld is reading...\n", id);
+    sleep(1);  // Simulate read time
 
+    // Exit section for reader
     pthread_mutex_lock(&mutex);
     readCount--;
-    if (readCount == 0)
-        pthread_mutex_unlock(&roomEmpty); // Last reader unlocks roomEmpty to allow writers
+    if (readCount == 0) {
+        sem_post(&roomEmpty);  // Last reader unlocks the room
+    }
     pthread_mutex_unlock(&mutex);
 
     return NULL;
 }
 
 void* writer(void* arg) {
-    pthread_mutex_lock(&roomEmpty);  // Writer needs exclusive access
+    long id = (long)arg;
 
-    // Writing...
-    printf("Writer %ld is writing...\n", (long)arg);
-    sleep(1);
+    // Entry section for writer
+    sem_wait(&roomEmpty);  // Wait until room is empty
 
-    pthread_mutex_unlock(&roomEmpty);
+    // Critical section (writing)
+    printf("Writer %ld is writing...\n", id);
+    sleep(1);  // Simulate write time
+
+    // Exit section for writer
+    sem_post(&roomEmpty);  // Release exclusive access
+
     return NULL;
 }
 
 int main() {
-    pthread_t r1, r2, w1;
+    pthread_t readers[5], writers[2];
 
-    pthread_mutex_init(&roomEmpty, NULL);
-    pthread_mutex_init(&mutex, NULL);
+    // Initialize synchronization primitives
+    sem_init(&roomEmpty, 0, 1);            // Binary semaphore
+    pthread_mutex_init(&mutex, NULL);      // For readCount
 
-    pthread_create(&r1, NULL, reader, (void*)1);
-    pthread_create(&r2, NULL, reader, (void*)2);
-    pthread_create(&w1, NULL, writer, (void*)1);
+    // Create reader threads
+    for (long i = 0; i < 5; i++) {
+        pthread_create(&readers[i], NULL, reader, (void*)i);
+    }
 
-    pthread_join(r1, NULL);
-    pthread_join(r2, NULL);
-    pthread_join(w1, NULL);
+    // Create writer threads
+    for (long i = 0; i < 2; i++) {
+        pthread_create(&writers[i], NULL, writer, (void*)i);
+    }
 
-    pthread_mutex_destroy(&roomEmpty);
+    // Wait for threads to finish
+    for (int i = 0; i < 5; i++) {
+        pthread_join(readers[i], NULL);
+    }
+    for (int i = 0; i < 2; i++) {
+        pthread_join(writers[i], NULL);
+    }
+
+    // Clean up
+    sem_destroy(&roomEmpty);
     pthread_mutex_destroy(&mutex);
 
     return 0;

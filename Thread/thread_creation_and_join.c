@@ -38,6 +38,9 @@ int main() {
         int* idx = malloc(sizeof(int));
         *idx = i;
         if (pthread_create(&threads[i], NULL, sum_array_part, idx) != 0) {// here &threads[i] is the address of the thread variable or thread identifier
+             //NULL means default attributes which means the thread will be created with default attributes
+             // if we want to set the attributes of the thread, we can use pthread_attr_t
+             
             perror("Failed to create thread");
             return 1;//if failed to create thread, return 1 
         }

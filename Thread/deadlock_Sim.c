@@ -44,7 +44,7 @@ int main() {
 
     pthread_create(&thread1, NULL, thread1_func, NULL);
     pthread_create(&thread2, NULL, thread2_func, NULL);
-
+printf("Thread 1 and Thread 2 created\n");
     pthread_join(thread1, NULL);
     pthread_join(thread2, NULL);
 
